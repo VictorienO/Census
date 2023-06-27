@@ -36,6 +36,9 @@ import networkx as nx
 from networkx.algorithms import approximation
 import random
 from PyQt5.QtCore import QVariant
+from qgis.utils import iface
+#from qgis._core import QgsDistanceArea, QgsEllipsoid
+
 #import qgis.core.QgsPalLayerSettings
 #from qgis.core import QgsPalLayerSettings
 #from qgis.core import QgsLabeling, QgsLabelAttribute, QgsExpression, QgsLinePlacement, QgsMarkerSymbol, QgsSingleSymbolRenderer
@@ -137,10 +140,9 @@ class Census:
         clean_parcours_zone = self.coordonnees_formatees(itineraire)
         
         first_tri = self.iti_petit_grand_tri(clean_parcours_zone)
-        apres_premier_tarrachement = self.iti_mignon_oust(G_zone, first_tri[0], first_tri[1])
-        remise_en_forme = self.reformatage(apres_premier_tarrachement)
+        apres_premier_rattachement = self.iti_mignon_oust(G_zone, first_tri[0], first_tri[1])
+        remise_en_forme = self.reformatage(apres_premier_rattachement)
         tryingsmth = self.plot_itineraries_when_multiple(remise_en_forme)
-        #last_iti = self.unique(G_zone,remise_en_forme)
         snake = []
         last_iti = self.multiples_to_one(G_zone, remise_en_forme, snake, remise_en_forme[0])
         couche_finish = self.extraction_tuple(last_iti)
@@ -151,17 +153,35 @@ class Census:
         couche_iti = self.plot_arrow_polyline(couche_finish)
         return couche_iti
      
-    def plot_couches_entrees(self,shp_roads_path, shp_hydro_path, shp_zone_path):
-        # FONCTIONNE
+    def plot_couches_entrees(self,shp_roads_path, shp_hydro_path, shp_zone_path): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui prend en entrée les chemins d'accès aux couches sélectionnées
+        par l'utilisateur et qui les représente sur QGIS, et  qui ressort les couches vectorielles. 
+
+        Parameters
+        ----------
+        shp_roads_path : String
+            Chemin d'accès à la couche routes
+        shp_hydro_path : String
+            Chemin d'accès à la couche hydrographie
+        shp_zone_path : String
+            Chemin d'accès à la couche zone
+
+        Returns
+        -------
+        zone_layer, roads_layer, hydro_layer : QgsVectorLayer
+            Couches QGIS construites.
+
+        """
+        hydro_layer = QgsVectorLayer(shp_hydro_path, "Hydrographie", "ogr")
         zone_layer = QgsVectorLayer(shp_zone_path, "Zone", "ogr")
         roads_layer = QgsVectorLayer(shp_roads_path, "Routes", "ogr")
-        hydro_layer = QgsVectorLayer(shp_hydro_path, "Hydrographie", "ogr")
+        #QgsProject.instance().addMapLayer(hydro_layer)
         QgsProject.instance().addMapLayer(zone_layer)
         QgsProject.instance().addMapLayer(roads_layer)
-        QgsProject.instance().addMapLayer(hydro_layer)
         return zone_layer, roads_layer, hydro_layer
 
-    def reduction_donnees_au_necessaire(self, shp_roads_path, shp_hydro_path, shp_zone_path):
+    def reduction_donnees_au_necessaire(self, shp_roads_path, shp_hydro_path, shp_zone_path): # En cours
         zone_layer = QgsVectorLayer(shp_zone_path, "Zone", "ogr")
         roads_layer = QgsVectorLayer(shp_roads_path, "Routes", "ogr")
         hydro_layer = QgsVectorLayer(shp_hydro_path, "Hydrographie", "ogr")
@@ -184,8 +204,6 @@ class Census:
         QgsProject.instance().addMapLayer(hydro_layer)
         
         return zone_layer, layer_resultat, hydro_layer
-
-
 
     def explosion_des_routes(self, road_layer): # Cette fonction est opérationnelle et est commentée.
         """
@@ -285,17 +303,23 @@ class Census:
         
         # Initialisation d'un graphe
         G = nx.Graph()
+        target_crs = QgsCoordinateReferenceSystem('EPSG:32632')  # Exemple: UTM Zone 32N, correspondant au Nigeria
 
+    # Créer l'objet QgsCoordinateTransform pour la transformation des coordonnées
+        transform = QgsCoordinateTransform(QgsCoordinateReferenceSystem('EPSG:4326'), target_crs, QgsProject.instance())
+        
         # Construction du graphe et remplissage
         for start_point, end_point, id1, id2 in arretes_de_zone:
             start_node = tuple(start_point[:2])
             end_node = tuple(end_point[:2])
             edge_label = f"{id1}_{id2}"  # Étiquette de l'arête
-            
-        # Ajout des nœuds et l'arête au graphe
+            start_point_proj = transform.transform(QgsPointXY(start_node[0], start_node[1]))
+            end_point_proj = transform.transform(QgsPointXY(end_node[0], end_node[1]))
+            distance = start_point_proj.distance(end_point_proj)
+            # Ajout des nœuds et l'arête au graphe
             G.add_node(start_node)
             G.add_node(end_node)
-            G.add_edge(start_node, end_node, label=edge_label, weight=1)
+            G.add_edge(start_node, end_node, label=edge_label, weight=distance)
 
         # Identification des nœuds inutiles
         modified = True
@@ -308,31 +332,69 @@ class Census:
                 
                 if len(neighbors) == 2:
                     arretes_voisines = []
+                    poids = []
                     for voisin in neighbors:
                         edge_label = G.edges[node, voisin]['label']
                         arretes_voisines.append(edge_label)
+                        edge_point = G.edges[node,voisin]['weight']
+                        poids.append(edge_point)
                     label1 = arretes_voisines[0]
                     label2 = arretes_voisines[1]
                     
                     if label1 == label2:
                         
+                        # On définit le nouveau poids
+                        weight_redefini = sum(poids)
+                
                         # On retire les noeuds inutiles et on reconstruit l'arrete.
                         G.remove_node(node)
-                        G.add_edge(neighbors[0], neighbors[1], label=label1, weight=2) #attention, le poids devra etre une pondération
+                        G.add_edge(neighbors[0], neighbors[1], label=label1, weight=weight_redefini) #attention, le poids devra etre une pondération
                         modified = True
                         break
+        testkm = []
+        for start_node, end_node, edge_data in G.edges(data=True):
+            weight = edge_data['weight']
+            testkm.append(weight)
+            
+        print("la taille du graphe en mètre : ", sum(testkm))
+
 
         return G
 
-    def chemin_optimal(self, graph,passed_edges,passed_nodes, nombre_true,poids_total_parcouru, noeud_depart):
-        
-        #FONCTIONNE
-        
-        nombre_edges = graph.number_of_edges()
-       # print("nombre true", nombre_true)
-        if nombre_true >= nombre_edges:
+    def chemin_optimal(self, graph,passed_edges,passed_nodes, nombre_true,poids_total_parcouru, noeud_depart): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui implémente un algorithme glouton, qui construit des itinéraire. L'algorithme est "aveugle"
+        et raisonne donc sur une logique de PPV, avec une considération des poids et du statut des arêtes voisines
+        d'un noeud. Il s'agit d'un algorithme récursif, qui créé donc plusieurs itinéraires optimaux.
+
+        Parameters
+        ----------
+        graph : networkx.graph
+            Graphe modélisant le réseau routier de la zone étudiée.
+        passed_edges : list
+            Liste d'arêtes, qui construisent l'itinéraire (dès que l'on passe par une arête, elle est ajoutée à cette liste)
+        passed_nodes : liste
+            Liste de noeuds, idem que passed_edges
+        nombre_true : int
+            Nombred'arêtes avec le statut "visited"
+        poids_total_parcouru : int
+            Poids total parcouru au cours de l'itinéraire
+        noeud_depart : networkx.nodes
+            Noeud de départ, peut être aléatoire ou choisi à l'initialisation, est aléatoire parmi les noeuds non-visités lors de la récursivité.
+
+        Returns
+        -------
+        passed_edges : list
+            Liste d'arêtes, qui construisent l'itinéraire (dès que l'on passe par une arête, elle est ajoutée à cette liste)
+        poids_total_parcouru : int
+            Poids total parcouru au cours de l'itinéraire
+
+        """
+        nombre_edges = graph.number_of_edges() # On récupère le nombre d'arêtes du graphe
+        if nombre_true >= nombre_edges:# Condition d'arrêt : toutes les arêtes sont visitées. 
             return passed_edges, poids_total_parcouru
         liste_noeuds_libres = []
+        
         for node in list(graph.nodes()):
             neighbors = list(graph.neighbors(node))
             for voisin in neighbors:    
@@ -344,7 +406,7 @@ class Census:
                 start_node = liste_noeuds_libres[0]
                 passed_nodes.append(start_node)
             else:
-                print("c'est la merde")
+                print("ERROR")
         else:
             start_node = noeud_depart
             
@@ -502,32 +564,25 @@ class Census:
                                 poids_total_parcouru += graph.edges[noeud1,noeud_suivant]['weight']
                                 
                             else:
-                                
-                            #print("arretes_pas_visites l92 ", arretes_pas_visites)
-                           # print("on trouve une autre portion de chemin")
+                                # Récursivité : il n'y a aucune arête assez à proximité, on relance l'algorithme à partir d'un autre point. 
                                 return self.chemin_optimal(graph, passed_edges,passed_nodes, nombre_true,poids_total_parcouru, 0)
         return passed_edges, poids_total_parcouru
     
-    def tri_itineraires(self,chemin):
+    def tri_itineraires(self,chemin): # Cette fonction est opérationnelle et est commentée.
         """
-        Fonction qui permet de passer des entités "routes" aux tronçons qui les composent,
-        et donc de prendre en compte la totalité des noeuds nécessaires à la modélisation
-        du réseau en graphe, prenant en compte les interesections de routes non
-        explicites dans les données "routes"
+        Fonction qui permet de passer des paires de noeuds à des polylignes
 
         Parameters
         ----------
-        road_layer : QgsVectorLayer
-            Couche QGIS qui stocke toutes les données routières 
+        chemin : list
+            Liste dont les données sont organisées en paires de noeuds (pour chaque arête) 
 
         Returns
         -------
-        features_troncons : QgsVectorLayer
-            Couche QGIS qui stocke tous les tronçons de chaque route.
+        les_chemins : list
+            Liste qui fonctionne en terme de noeuds, pas en paires. C'est une polyligne. 
 
         """
-        
-        #FONCTIONNE
         
         les_chemins = []  # Liste pour stocker les itinéraires
         chemin_temporaire = []  # Liste temporaire pour un itinéraire courant
@@ -551,56 +606,82 @@ class Census:
 
         return les_chemins
     
-    def meilleur_glouton(self,G,nombre_de_relance):
-        
-        #FONCTIONNE
+    def meilleur_glouton(self,G,nombre_de_relance): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui permet de lancer l'algorithme glouton (chemin_optimal, tri_itineraires) plusieurs fois et de comparer les
+        résultats de chacun pour choisir le plus optimal.
+
+        Parameters
+        ----------
+        G : networkx.graph
+            graphe modélisant le réseau routier.
+        nombre_de_relance : int
+            Nombre de fois que l'utilisateurs souhaite lancer l'algorithme glouton. 
+
+        Returns
+        -------
+        itineraire_final : list
+            Liste avec chaque itinéraire construit, sous forme de polyligne
+        solution : list
+            Liste avec chaque itinéraire construit, sous forme de liste de paires de noeuds, de polylignes, avec le nombre d'itinéraires, le coût total parcouru, l'indice d'optimalité.
+        """
         
         liste_infos_pour_chaque_iti = []
         
-        for i in range(nombre_de_relance):
-            #print("premiertest")
+        for i in range(nombre_de_relance): # On réalise n fois le protocole suivant :
+            
+            # Initialisation 
             nx.set_node_attributes(G, False, 'Visited')
             nx.set_edge_attributes(G, False, 'Visited')
-         
             poids_total_parcouru = 0
-            noeud_depart = random.choice(list(G.nodes()))
-            #print("le noeud de départ", noeud_depart)
+            noeud_depart = random.choice(list(G.nodes())) # On initialise un noeud de départ. Il est ici au hasard, il peut être demandé à l'utilisateur.
             passed_edges = []
             passed_nodes = []
             nombre_true = 0
-            A = self.chemin_optimal(G, passed_edges,passed_nodes,nombre_true,poids_total_parcouru, noeud_depart)
-            #print("le chemin : ", A)
-            B = self.tri_itineraires(A[0])
-            #print("mon tri en plusieurs itinéraires : ", B)
-            nombre_iti = len(B)
-            #print("Il y a ", nombre_iti, " itinéraires différents construits")
-            poids_de_la_relance = A[1]
-            #print(poids_de_la_relance)
-            #print("une itération est réalisée")
             
-            #Definition de l'indice d'optimalité, qu'on souhaite minimiser. 
+            # Lancement des algorithmes de parcourt optimal
+            A = self.chemin_optimal(G, passed_edges,passed_nodes,nombre_true,poids_total_parcouru, noeud_depart)
+            B = self.tri_itineraires(A[0])
+            nombre_iti = len(B) # On récupère le nombre d'itinéraires créés lors de l'itération. 
+            poids_de_la_relance = A[1] # On récupère le poids total parcour lors de l'itération.
+
+            # Définition de l'indice d'optimalité, qu'on souhaite minimiser.
             alpha = 0.85
             beta = 0.15
             indice_optimalite = alpha * nombre_iti + beta * poids_de_la_relance
-            #print("indice d'optimalité :", indice_optimalite)
             liste_infos_pour_chaque_iti.append([A, B, nombre_iti, poids_de_la_relance, indice_optimalite])
         
+        # On cherche l'itinéraire qui a l'indice d'optimalité le plus faible, c'est-à-dire qui minimise le nombre de portions d'itinéraire, ainsi que le coût total. 
         R_min = []
         for iti_possible in liste_infos_pour_chaque_iti:
             R_min.append(iti_possible[-1])
         
         minimum = min(R_min)
         index_minimum = R_min.index(minimum)
-       # print("le minimum est :", minimum,"d'index", index_minimum)
+        
+        # On prépare le return, qui ressort les informations sur le meilleur itinéraire. 
         solution = liste_infos_pour_chaque_iti[index_minimum]
+        print("le nombre de metres parcouru est : ", solution[3])
         itineraire_final = solution[1]
         
         return itineraire_final, solution
     
-    def coordonnees_formatees(self,solution):
-        
-        #FONCTIONNE
-        
+    def coordonnees_formatees(self,solution): # Cette fonction est opérationnelle et fonctionne.
+        """
+        Fonction qui prend en entrée les arretes itinéraires optimaux et qui les formate pour préparer
+        un premier rattachement (par le biais d'une distinction entre les petits et grands itinéraires).
+
+        Parameters
+        ----------
+        solution : list
+            Liste en bazard des itinéraires optimaux. 
+
+        Returns
+        -------
+        coordinates_propre : list
+            Liste propre de ce qui va permettre de les classer entre petits et grands itinéraires. 
+
+        """
         coordinates_propre = []
         for iti in solution :
             iti_propre = []
@@ -608,18 +689,23 @@ class Census:
                 iti_propre.append(arrete[0])
             iti_propre.append(iti[-1][1])
             coordinates_propre.append(iti_propre)
-     #   print("ce qui doit passer en entrée : ", coordinates_propre)
-     #   print("sa longueur ", len(coordinates_propre))
-        #for element in coordinates_propre:
-        #    print("longueur de la sous liste : ", len(element))
         return coordinates_propre
     
-    def plot_itineraries_when_multiple(self,coo):
-        
-        #FONCTIONNE
-        
-        for index, polyligne in enumerate(coo):
-           # print("polyligne a représenter : ", len(polyligne))
+    def plot_itineraries_when_multiple(self,coo): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui permet de représenter les itinéraires optimaux sur une zone, avant que ceux-ci ne
+        soient rattachés entre eux. Elle ne retourne rien puisqu'il s'agit d'une fonction de visualisation.
+
+        Parameters
+        ----------
+        coo : List
+            Liste de listes : chaque sous-liste est un itinéraire construit par les fonctions précédentes.
+
+        Returns
+        -------
+
+        """
+        for index, polyligne in enumerate(coo): # On parcourt chaque itinéraire optimal créé, on en fait une couche, et on la représente sur QGIS. 
             layer = QgsVectorLayer('LineString?crs=epsg:4326', f'Itineraire_{index}', 'memory')
             points = [QgsPointXY(*coord) for coord in polyligne]
             line = QgsGeometry.fromPolylineXY(points)
@@ -627,19 +713,21 @@ class Census:
             feature.setGeometry(line)
             layer.dataProvider().addFeature(feature)
             QgsProject.instance().addMapLayer(layer)
-    
-    def plot_itineraries(self, coo):
-       # print("polyligne a représenter : ", len(coo))
-        layer = QgsVectorLayer('LineString?crs=epsg:4326', 'Itinéraire', 'memory')
-        points = [QgsPointXY(coord[0], coord[1]) for coord in coo]
-        line = QgsGeometry.fromPolylineXY(points)
-        feature = QgsFeature()
-        feature.setGeometry(line)
-        layer.dataProvider().addFeature(feature)
-        QgsProject.instance().addMapLayer(layer)
-    
-    
-    def plot_arrow_polyline(self, polyligne):
+        
+    def plot_arrow_polyline(self, polyligne): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui permet de configruer la visualisation et représenter l'itinéraire final. Elle ne
+        return rien, il ne s'agit que de visualisation.
+
+        Parameters
+        ----------
+        polyligne : List
+            Liste de tuples : c'est l'itinéraire final ordonné
+
+        Returns
+        -------
+
+        """
         points = [QgsPointXY(x[0], x[1]) for x in polyligne]
         
         # Création de la polyligne à partir des points
@@ -686,12 +774,8 @@ class Census:
         
         # Ajout de la couche à la carte
         QgsProject.instance().addMapLayer(layer)
-        
-        #Ajout d'étiquettes
-        #Probleme d'importations....
-    
 
-    def draw_graph(self,G):
+    def draw_graph(self,G): # Non lancée dans le plugin
         
         #FONCTIONNE, enfin pas vraiment, probleme avec la création du canva...
         
@@ -742,9 +826,6 @@ class Census:
     # Afficher la carte dans la fenêtre de QGIS
         return canvas.show()
     
-    
-    
-    
     def iti_petit_grand_tri(self,liste_de_liste): # Cette fonction est opérationnelle et est commentée.
         """
         Fonction qui permet de trier les itinéraires : les plus petits et les plus grands
@@ -765,7 +846,7 @@ class Census:
         petits_iti = []
         grands_iti = []
         for liste in liste_de_liste:
-            if len(liste) <20:
+            if len(liste) <20: # On décide du seuil pour définir un petit itinéraire. Ici, c'est 20 noeuds la limite. 
                 petits_iti.append(liste)
                 
             else:
@@ -814,26 +895,50 @@ class Census:
                     break
         return petit_iti, grand_iti
     
-    def multiples_to_one(self, graph, liste_coordinates, snake, iti_2):
+    def multiples_to_one(self, graph, liste_coordinates, snake, iti_2): # Cette fonction est opérationnelle et est commentée. 
+        """
+        Fonction qui permet de créer l'itinéraire final (en terme de points passés) en collant chaque itinéraire
+        bout-à-bout en fonction de leur proximité. Elle passe pour cela par une évaluation de la qualité des Dijkstra, d'un point
+        d'arrivée d'itinéraire à un point de départ d'un autre. Il s'agit d'une fonction récursive pour permettre
+        cette évaluation de toutes les options. 
+
+        Parameters
+        ----------
+        graph : networkx.graph
+            Graphe modélisant le réseau routier de la ville. 
+        liste_coordinates : list
+            Liste de liste, avec chaque liste un itinéraire optimal.
+        snake : list
+            Liste de listes qui ordonne les itinéraires de liste_coordinate pour optimiser le parcours total
+        iti_2 : list
+            Itinéraire à partir duquel on recherche un autre itinéraire, le plus proche.
+
+        Returns
+        -------
+        snake : list
+            Liste de listes avec les itinéraires ordonnés.
+
+        """
         iti = iti_2
-        last_point = iti[-1]
+        last_point = iti[-1] # On récupère le dernier point de l'itinéraire en question 
         resultat_dijkstra = []
-        for i in range(len(liste_coordinates)):
-            if liste_coordinates[i] != iti :
-                premier_point = liste_coordinates[i][1]
-                chemin_rattache = nx.dijkstra_path(graph, last_point, premier_point)
-                resultat_dijkstra.append([chemin_rattache, liste_coordinates[i], i])
+        for i in range(len(liste_coordinates)): # On parcourt les autres itinéraires
+            if liste_coordinates[i] != iti : # Si l'itinéraire est différent de celui sur lequel on travaille, 
+                premier_point = liste_coordinates[i][1] # On récupère son point de départ
+                chemin_rattache = nx.dijkstra_path(graph, last_point, premier_point) # On créé un Dijkstra pour trouver le chemin le plus court entre ces points,
+                resultat_dijkstra.append([chemin_rattache, liste_coordinates[i], i]) # On ajoute ce chemin, l'itinéraire en question, son index dans la liste_coordinates dans une liste.
         lengthT = []
-        for i in range(len(resultat_dijkstra)):
+        for i in range(len(resultat_dijkstra)): # On parcourt la liste créée
             groupe_d_interet = resultat_dijkstra[i]
-            indexx = groupe_d_interet[2]
+            indexx = groupe_d_interet[2] 
             lengh = len(groupe_d_interet[0])
-            lengthT.append([lengh, indexx])
+            lengthT.append([lengh, indexx])# On introduit la longueur de chaque Dijkstra.
         
-        if len(lengthT) ==0:
+        if len(lengthT) ==0: # Critère d'arrêt, il n'y a plus de voisins ! 
             snake.append(iti)
             return snake
-        sous_liste_min = min(lengthT, key=lambda x: x[0])
+        
+        sous_liste_min = min(lengthT, key=lambda x: x[0]) # On récupère le Dijkstra avec le plus petit coût
         idx_plus_petit = sous_liste_min[1]
 
         for i, item in enumerate(resultat_dijkstra):
@@ -841,65 +946,67 @@ class Census:
                 index_i = i
                 break
         solve = resultat_dijkstra[index_i]
-        snake.append([iti, solve[0][1:]])
-        possibilite = solve[1]
-        liste_coordinates.remove(iti)
+        snake.append([iti, solve[0][1:]]) # On ajoute à snake l'itinéraire parcouru, le dijkstra qui à l'itinéraire le plus proche...
+        possibilite = solve[1] # Et on définit notre itinéraire d'intérêt pour la prochaine itération
+        liste_coordinates.remove(iti) # On retire l'itinéraire parcouru de la liste_coordinates pour éviter de tourner en boucle. 
         
-        return self.multiples_to_one(graph, liste_coordinates, snake, possibilite)
-    
-
-    
-    def unique(self,graph, liste_coordinates):
-        snake = []
-        for i in range(len(liste_coordinates) - 1):
-            itineraire_en_question = liste_coordinates[i]
-            itineraire_suivant = liste_coordinates[i+1]
-            start_node = itineraire_en_question[-1]
-            end_node = itineraire_suivant[0]
+        return self.multiples_to_one(graph, liste_coordinates, snake, possibilite) # On réappelle la fonction jusqu'au critère d'arrêt. 
             
-            route_entre_les_deux = nx.dijkstra_path(graph, start_node, end_node)
-            snake.append([itineraire_en_question, route_entre_les_deux[1:-1]])
-        snake.append(liste_coordinates[-1])
-        
-        return snake
-            
+    def extraction_tuple(self,liste_a_trier): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui permet de transformer une liste d'itinéraire non formatée en une liste de tuples.
+        Elle considère le cas ou deux sous-listes peuvent avoir été créées au maximum.
 
-    def extraction_tuple(self,liste_a_trier):
+        Parameters
+        ----------
+        liste_a_trier : List
+            Liste de listes, de listes de listes, de tuples : elle est mal formatée mais les informations sont chronologiquement correctes. 
+
+        Returns
+        -------
+        u : List
+            Liste de tuples qui consiste en la polyligne final, l'itinéraire ressorti pour la zone étudiée.
+        """
         u = []
         for element in liste_a_trier:
-            
-            if len(element) ==2 :
-                for liste in element:
+            if len(element) ==2 : # Si l'élément à une longueur de deux, alors c'est une liste de deux listes
+                for liste in element: # Pour chacune des deux listes...
                     for tuples in liste:
-                        u.append(tuples)
-            else:
-                for tuples in element:
+                        u.append(tuples) # ... on ajoute les tuples à u.
+            else: # Sinon, l'élément est une liste de tuples
+                for tuples in element: # On ajoute les tuples à u.
                     u.append(tuples)
-        #print("u a cette forme :",u)
-        #print("longueur attendue ", len(u))
         return u
     
-    
-    def reformatage(self,rattache):
-        coordinates_final = []
+    def reformatage(self,rattache): # Cette fonction est opérationnelle et est commentée.
+        """
+        Fonction qui condense la liste de deux listes (grands iti et petits iti) en une seule pour la préparer
+        à la fonction créant l'itinéraire final.
+
+        Parameters
+        ----------
+        rattache : List
+            Liste de deux listes, avec dans chacune les itinéraires (soit les petis, soit les grands). 
+
+        Returns
+        -------
+        coordinates_final : List
+            Liste de tuples qui consiste en la polyligne final, l'itinéraire ressorti pour la zone étudiée.
+        """
+        coordinates_final = [] # On ajoute les éléments de chaque liste dans une liste
         for iti in rattache[0]:
             coordinates_final.append(iti)
         for itou in rattache[1]:
             coordinates_final.append(itou)
             
-            #Test propreté des itinéraires
-            for i in coordinates_final:
-                for j in i:
-                    if type(j) == list:
-                        print("ca va pas")
-                        print(j)
-        print("coordonnées telles qu'elles vont rentrerdans la multiple_to_one et qui sont correctes",coordinates_final)
-        print("longueur totale de ces coordonnées",len(coordinates_final))
-        for element in coordinates_final:
-            print("longueur de l'itinéraire : ", len(element))
+        #Test propreté des itinéraires
+        for i in coordinates_final:
+            for j in i:
+                if type(j) == list:
+                    print("Error : your coordinates aren't good")
         return coordinates_final
     
-    def re_etoffement(self, troncons, polyligne):
+    def re_etoffement(self, troncons, polyligne): # En cours.
         print("notre couche de troncon : ", len(troncons))
         print("notre couche avec une polyligne : ", len(polyligne))
         troncon_formate_pour_recollage = []
