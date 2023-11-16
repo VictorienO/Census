@@ -37,13 +37,11 @@ from networkx.algorithms import approximation
 import random
 from PyQt5.QtCore import QVariant
 from qgis.utils import iface
-#from qgis._core import QgsDistanceArea, QgsEllipsoid
-
-#import qgis.core.QgsPalLayerSettings
-#from qgis.core import QgsPalLayerSettings
-#from qgis.core import QgsLabeling, QgsLabelAttribute, QgsExpression, QgsLinePlacement, QgsMarkerSymbol, QgsSingleSymbolRenderer
-#from qgis.gui import QgsCurveArrowSymbolLayer
-#from qgis.core import QgsVectorLayer, QgsProject,QgsFeature, QgsExpression, QgsFeatureRequest, QgsVectorLayerUtils
+import math
+import numpy as np
+from scipy.spatial.distance import euclidean
+import tempfile
+import ast
 
 class Census:
     """QGIS Plugin Implementation."""
@@ -84,7 +82,22 @@ class Census:
             if filenames:
                 filename = filenames[0]
                 line_edit.setText(filename)
+                
+    def select_output_raster(self, line_topo):
+        dialog = QFileDialog()
+        dialog.setFileMode(QFileDialog.ExistingFile)
+        if dialog.exec():
+            filenames = dialog.selectedFiles()
+            if filenames:
+                filename = filenames[0]
+                line_topo.setText(filename)
 
+    def select_folder(self, line_edit_doss):
+        folder_path = QFileDialog.getExistingDirectory(self.dlg, "Sélectionner un dossier", ".")
+        if folder_path:
+            line_edit_doss.setText(folder_path)
+            self.dossier_selectionne = folder_path
+            
     def run(self):
         if self.first_start:
             self.first_start = False
@@ -93,7 +106,8 @@ class Census:
             self.dlg.pushShpRoads.clicked.connect(lambda: self.select_output_file(self.dlg.lineShpRoads))
             self.dlg.pushShpHydro.clicked.connect(lambda: self.select_output_file(self.dlg.lineShpHydro))
             self.dlg.pushShpZone.clicked.connect(lambda: self.select_output_file(self.dlg.lineShpZone))
-
+            self.dlg.pushTopo.clicked.connect(lambda: self.select_output_raster(self.dlg.lineTopo))
+            self.dlg.getOutFile.clicked.connect(lambda: self.select_folder(self.dlg.lineOutFile))
         # show the dialog
         self.dlg.show()
         # Run the dialog event loop
@@ -103,6 +117,7 @@ class Census:
             shp_roads_path = self.dlg.lineShpRoads.text()
             shp_hydro_path = self.dlg.lineShpHydro.text()
             shp_zone_path = self.dlg.lineShpZone.text()
+            raster_topo_path = self.dlg.lineTopo.text()
             
             # Check shapefile validity
             if not self.is_valid_shapefile(shp_roads_path):
@@ -111,8 +126,38 @@ class Census:
                 return
             if not self.is_valid_shapefile(shp_zone_path):
                 return
+            zone_layer = QgsVectorLayer(shp_zone_path, "Zone", "ogr")
+            id_de_ite = 0
+            for feature in zone_layer.getFeatures():
+                geometry = feature.geometry()
+
+                # Créer une nouvelle couche vectorielle pour le polygone en cours
+                new_layer = QgsVectorLayer("Polygon?crs=epsg:4326", "Polygone", "memory")
+                
+                # Ouvrir un éditeur d'entités pour la nouvelle couche
+                new_layer.startEditing()
+                
+                # Créer une nouvelle entité pour la nouvelle couche
+                new_feature = QgsFeature()
+                new_feature.setGeometry(geometry)
+                
+                # Ajouter l'entité à la nouvelle couche
+                new_layer.addFeature(new_feature)
+
+                # Valider les modifications de la couche
+                new_layer.commitChanges()
+                temp_dir = tempfile.gettempdir()
+                temp_file = os.path.join(temp_dir, f"temp_layer_{feature.id()}.shp")
+
+                # Enregistrer la couche temporaire sur le disque
+                QgsVectorFileWriter.writeAsVectorFormat(new_layer, temp_file, "utf-8", new_layer.crs(), "ESRI Shapefile")
+
+
+                #print("mon chemin est : ",temp_file)
+                
             
-            self.process_shapefiles(shp_roads_path, shp_hydro_path, shp_zone_path)
+                self.process_shapefiles(shp_roads_path, shp_hydro_path, temp_file,raster_topo_path, id_de_ite)
+                id_de_ite +=1
 
     def is_valid_shapefile(self, shp_path):
         layer = QgsVectorLayer(shp_path, "Validation Layer", "ogr")
@@ -126,37 +171,93 @@ class Census:
         return True
     
 
-    def process_shapefiles(self, shp_roads_path, shp_hydro_path, shp_zone_path):
-        Z_layer, R_layer, H_layer = self.plot_couches_entrees(shp_roads_path, shp_hydro_path, shp_zone_path)
-        #Z_layer, R_layer, H_layer = self.reduction_donnees_au_necessaire(shp_roads_path,shp_hydro_path,shp_zone_path)
-        #T_layer = self.explosion_des_routes(R_layer)
-        T_layer = R_layer
-        #QgsProject.instance().addMapLayer(T_layer)
+    def process_shapefiles(self, shp_roads_path, shp_hydro_path, shp_zone_path,raster_topo_path,id_en_question): # FINAL
+        """
+        Fonction qui prend en entrée les chemins d'accès aux couches sélectionnées, un identifiant de secteur de dénombrement,
+        et qui lance le processus du plugin : c'est l'équivalent d'un main.
+        
+
+        Parameters
+        ----------
+        shp_roads_path : String
+            Chemin d'accès à la couche routes
+        shp_hydro_path : String
+            Chemin d'accès à la couche hydrographie
+        shp_zone_path : String
+            Chemin d'accès à la couche zone
+        id_en_question : int
+            Identifiant du secteur de dénombrement
+
+        Returns
+        -------
+        couche_iti : Il s'agit de l'itinéraire créé pour le secteur de dénombrement.
+
+        """
+        # Id du secteur de dénombrment
+        
+        idcouche = id_en_question
+        
+        # On appelles les fonctions
+        
+        Z_layer, R_layer, H_layer = self.reduction_donnees_au_necessaire(shp_roads_path,shp_hydro_path,shp_zone_path)
+        hydro_topo = self.plot_couches_entrees(shp_roads_path,shp_hydro_path,shp_zone_path,raster_topo_path)
+        T_layer_global = self.explosion_des_routes(R_layer,idcouche)
+        T_layer = T_layer_global[0]
         arretes = self.creation_arrete(T_layer)
         G_zone = self.creation_graphe(arretes)
-      #  grouph = self.draw_graph(G_zone)
-        itineraire, solution = self.meilleur_glouton(G_zone, 1000)
+        initialisation_nodess = self.get_first_node(self.dlg.adresse.text())
+        initialisation_node= initialisation_nodess[idcouche]
         
-        clean_parcours_zone = self.coordonnees_formatees(itineraire)
+        # Disjonction de cas : connexité du graphe pour savoir si on fait plusieurs itinéraires sur un même secteur ou non.
+        if type(G_zone) == nx.Graph:
+            itineraire, solution = self.meilleur_glouton(G_zone, int(self.dlg.iteration.text()),initialisation_node)
+            clean_parcours_zone = self.coordonnees_formatees(itineraire)
         
-        first_tri = self.iti_petit_grand_tri(clean_parcours_zone)
-        apres_premier_rattachement = self.iti_mignon_oust(G_zone, first_tri[0], first_tri[1])
-        remise_en_forme = self.reformatage(apres_premier_rattachement)
-        tryingsmth = self.plot_itineraries_when_multiple(remise_en_forme)
-        snake = []
-        last_iti = self.multiples_to_one(G_zone, remise_en_forme, snake, remise_en_forme[0])
-        couche_finish = self.extraction_tuple(last_iti)
+            first_tri = self.iti_petit_grand_tri(clean_parcours_zone)
+            apres_premier_rattachement = self.iti_mignon_oust(G_zone, first_tri[1], first_tri[2])
+            remise_en_forme = self.reformatage(apres_premier_rattachement)
+            
+            # Disjonction de cas en fonction de la taille de l'itinéraire (si jamais il est un bout dès le début).
+            if remise_en_forme == 0:
+                couche_finish = self.extraction_tuple(first_tri[0])
+                turn = self.indications(couche_finish)
+                couche_iti = self.plot_arrow_polyline(couche_finish, turn)
+            else:
+                snake = []
+                prelast_iti = self.multiples_to_one(G_zone, remise_en_forme, snake, remise_en_forme[0])
+                last_iti = self.add_start_line(first_tri[0],prelast_iti)
+                couche_finish = self.extraction_tuple(last_iti)
+                turn = self.indications(couche_finish)
+                couche_iti = self.plot_arrow_polyline(couche_finish,turn)
+            
+            return couche_iti
         
-        #couche_sur_troncon = self.re_etoffement( arretes, couche_finish)
-        #couche_sur_troncon = self.re_etoffement_tes(T_layer, couche_finish)
-        # #print("couchefinale bien formatée sa mère", couche_finish)
-        couche_iti = self.plot_arrow_polyline(couche_finish)
-        return couche_iti
+        elif type(G_zone) == list:
+            for sous_graphe in G_zone:
+                itineraire, solution = self.meilleur_glouton(sous_graphe, int(self.dlg.iteration.text()),initialisation_node)
+                clean_parcours_zone = self.coordonnees_formatees(itineraire)
+                first_tri = self.iti_petit_grand_tri(clean_parcours_zone)
+                
+                apres_premier_rattachement = self.iti_mignon_oust(sous_graphe, first_tri[1], first_tri[2])
+                remise_en_forme = self.reformatage(apres_premier_rattachement)
+                if remise_en_forme == 0:
+                    couche_finish = self.extraction_tuple(first_tri[0])
+                    turn = self.indications(couche_finish)
+                    couche_iti = self.plot_arrow_polyline(couche_finish, turn)
+                else:
+                    snake = []
+                    prelast_iti = self.multiples_to_one(sous_graphe, remise_en_forme, snake, remise_en_forme[0])
+                    last_iti = self.add_start_line(first_tri[0],prelast_iti)
+                    couche_finish = self.extraction_tuple(last_iti)
+                    turn = self.indications(couche_finish)
+                    couche_iti = self.plot_arrow_polyline(couche_finish, turn)
+
+            return couche_iti          
      
-    def plot_couches_entrees(self,shp_roads_path, shp_hydro_path, shp_zone_path): # Cette fonction est opérationnelle et est commentée.
+    def plot_couches_entrees(self,shp_roads_path, shp_hydro_path, shp_zone_path,raster_topo_path): # FINAL
         """
         Fonction qui prend en entrée les chemins d'accès aux couches sélectionnées
-        par l'utilisateur et qui les représente sur QGIS, et  qui ressort les couches vectorielles. 
+        par l'utilisateur et qui les représente sur QGIS, pour l'hydrographie et la topographie.
 
         Parameters
         ----------
@@ -169,43 +270,122 @@ class Census:
 
         Returns
         -------
-        zone_layer, roads_layer, hydro_layer : QgsVectorLayer
-            Couches QGIS construites.
+        Nothing : Il s'agit juste d'une fonction de visualisation
 
         """
-        hydro_layer = QgsVectorLayer(shp_hydro_path, "Hydrographie", "ogr")
+        #Représentation de l'hydrographie
+        
+        hydro_layer = QgsVectorLayer(shp_hydro_path, "Hydrographie", "ogr") # On créé une couche vectorielle
+        QgsProject.instance().addMapLayer(hydro_layer) # On ajoute à cette couche les données sur l'hydrographie
+        
+        # On construit la bbox du polygone
+        polygone_layer = QgsVectorLayer(shp_zone_path, "Zone", "ogr")
+        for feature in polygone_layer.getFeatures():
+            polygone_bbox = feature.geometry().boundingBox()
+            xMin = polygone_bbox.xMinimum()
+            yMin = polygone_bbox.yMinimum()
+            xMax = polygone_bbox.xMaximum()
+            yMax = polygone_bbox.yMaximum()
+            string_bbox = str(xMin) + ',' + str(xMax) +','+ str(yMin) + ',' + str(yMax) + ' [EPSG:4326]'
+        
+        #Représentation de la topographie
+        
+        # Predecoupage : on récupère les données topographique sur l'emprise de la zone
+        emprise = processing.run("gdal:cliprasterbyextent", {
+            'INPUT':raster_topo_path,
+            'PROJWIN':string_bbox,
+            'OVERCRS':False,
+            'NODATA':None,
+            'OPTIONS':'',
+            'DATA_TYPE':0,
+            'EXTRA':'',
+            'OUTPUT':'TEMPORARY_OUTPUT'
+            })
+        
+        emprise_path = emprise['OUTPUT']
+        test_emprise = QgsRasterLayer(emprise_path, "MNT_contour", "gdal") # On créé une couche raster
+        QgsProject.instance().addMapLayer(test_emprise) # On ajoute le MNT (seulement sur l'emprise)
+        
+        # On récupère maintenant les contours (lignes de niveaux)
+        creation_contour = processing.run("gdal:contour", {
+            'INPUT':emprise_path,
+            'BAND':1,
+            'INTERVAL': 0.5,
+            'FIELD_NAME':'ELEV',
+            'CREATE_3D':False,
+            'IGNORE_NODATA':False,
+            'NODATA':None,
+            'OFFSET':0,
+            'EXTRA':'',
+            'OUTPUT':'TEMPORARY_OUTPUT'
+            })
+        
+        contour_raster_path = creation_contour['OUTPUT']
+        cut_result_topo = processing.run("native:clip", {
+            'INPUT':contour_raster_path,
+            'OVERLAY':shp_zone_path,
+            'OUTPUT':'TEMPORARY_OUTPUT'})
+        
+        cut_topo_layer = cut_result_topo['OUTPUT']
+        QgsProject.instance().addMapLayer(cut_topo_layer) # On ajoute les lignes de niveaux au projet
+
+    def reduction_donnees_au_necessaire(self, shp_roads_path, shp_hydro_path, shp_zone_path): # FINAL
+        """
+        Fonction qui récupère les données du réseau routier et de l'hydrographie au sein du
+        secteur de dénombrement en question.
+        
+
+        Parameters
+        ----------
+        shp_roads_path : String
+            Chemin d'accès de la couche route.
+        shp_hydro_path : String
+            Chemin d'accès de la couche hydrographique.
+        shp_zone_path : String
+            Chemin d'accès de la couche d'un secteur de dénombrement de la zone étudiée.
+
+        Returns
+        -------
+        zone_layer : QgsVectorLayer
+            Couche QGIS du secteur de dénombrement.
+        result_road_layer : QgsVectorLayer
+            Couche  QGIS des routes sur ce secteur.
+        result_hydro_layer : QgsVectorLayer
+            Couche QGIS de l'hydrographie sur ce secteur.
+
+        """
+    
         zone_layer = QgsVectorLayer(shp_zone_path, "Zone", "ogr")
         roads_layer = QgsVectorLayer(shp_roads_path, "Routes", "ogr")
-        #QgsProject.instance().addMapLayer(hydro_layer)
-        QgsProject.instance().addMapLayer(zone_layer)
-        QgsProject.instance().addMapLayer(roads_layer)
-        return zone_layer, roads_layer, hydro_layer
-
-    def reduction_donnees_au_necessaire(self, shp_roads_path, shp_hydro_path, shp_zone_path): # En cours
-        zone_layer = QgsVectorLayer(shp_zone_path, "Zone", "ogr")
-        roads_layer = QgsVectorLayer(shp_roads_path, "Routes", "ogr")
         hydro_layer = QgsVectorLayer(shp_hydro_path, "Hydrographie", "ogr")
+        intersection_result = processing.run("native:intersection", {
+            'INPUT': shp_roads_path,
+            'OVERLAY': shp_zone_path,
+            'INPUT_FIELDS': [],
+            'OVERLAY_FIELDS': [],
+            'OVERLAY_FIELDS_PREFIX': '',
+            'OUTPUT': 'TEMPORARY_OUTPUT',
+            'GRID_SIZE': None
+        })
+        result_road_layer = intersection_result['OUTPUT']
         
-        if not roads_layer.isValid() or not zone_layer.isValid():
-            print("Erreur lors du chargement des couches.")
-        else:
-            # Effectuer la sélection par expression
-            expression = f'intersects($geometry, geometry(get_feature(\'{zone_layer.name()}\', 1)))'
-            roads_layer.selectByExpression(expression, QgsVectorLayer.SetSelection)
-            
-            # Créer une nouvelle couche avec les entités sélectionnées
-            layer_resultat = QgsVectorLayer("LineString?crs=epsg:4326", "Résultat", "memory")
-            layer_resultat.dataProvider().addFeatures([f for f in roads_layer.selectedFeatures()])
+        intersection_result_hydro = processing.run("native:intersection", {
+            'INPUT': shp_hydro_path,
+            'OVERLAY': shp_zone_path,
+            'INPUT_FIELDS': [],
+            'OVERLAY_FIELDS': [],
+            'OVERLAY_FIELDS_PREFIX': '',
+            'OUTPUT': 'TEMPORARY_OUTPUT',
+            'GRID_SIZE': None
+        })
+        result_hydro_layer = intersection_result_hydro['OUTPUT']
         
-        # Ajouter la couche résultat à la carte
-            QgsProject.instance().addMapLayer(layer_resultat)
-        
+        #QgsProject.instance().addMapLayer(result_hydro_layer)
         QgsProject.instance().addMapLayer(zone_layer)
-        QgsProject.instance().addMapLayer(hydro_layer)
-        
-        return zone_layer, layer_resultat, hydro_layer
+        #QgsProject.instance().addMapLayer(result_road_layer)
+        return zone_layer, result_road_layer, result_hydro_layer
 
-    def explosion_des_routes(self, road_layer): # Cette fonction est opérationnelle et est commentée.
+    def explosion_des_routes(self, road_layer, idcouche): # FINAL
         """
         Fonction qui permet de passer des entités "routes" aux tronçons qui les composent,
         et donc de prendre en compte la totalité des noeuds nécessaires à la modélisation
@@ -216,17 +396,27 @@ class Census:
         ----------
         road_layer : QgsVectorLayer
             Couche QGIS qui stocke toutes les données routières 
+        idcouche : int
+            Identifiant du secteur de dénombrement au sein de la zone entrée par l'utilisateur
 
         Returns
         -------
-        features_troncons : QgsVectorLayer
+        features_troncons : Features
+            Tous les tronçons de routes, sous forme de Features (attributs) QGIS
+        explode_layer : QgsVectorLayer
             Couche QGIS qui stocke tous les tronçons de chaque route.
 
         """
+        idlayer = str(idcouche)
         
         # Spécifie le chemin vers le fichier de sortie pour les lignes explosées, à demander à l'utilisateur.
-        output_layer = 'C:/Users/Myriam/Documents/IT2/stage/la_couche_sortie.shp'
+        part1 = str(self.dossier_selectionne)
+        part2 = 'la_couche_sortie'
+        part3 = idlayer
+        part4 = '.shp'
+        #output_layer = 'C:/Users/Myriam/Documents/PLUGIN_QGIS_CORRECT/donnees_crees/la_couche_sortie'+idlayer+'.shp'
 
+        output_layer = part1 + part2 + part3 + part4
         # Utilisation du processing pour exploser les lignes
         parameters = {'INPUT': road_layer, 'OUTPUT': output_layer, 'OVERWRITE': True}
         processing.run('qgis:explodelines', parameters)
@@ -234,18 +424,13 @@ class Census:
         # Création et représentation de la couche des routes explosées sur QGIS
         explode_layer = QgsVectorLayer(output_layer, "Troncons", "ogr")
         QgsProject.instance().addMapLayer(explode_layer)
-        # if not explode_layer.isValid():
-        #     print("Layer failed to load!")
-        # else:
-        #     QgsProject.instance().addMapLayer(explode_layer)
-        
+
         # Récupération des features de la couche, sortie
-        
         features_troncons = explode_layer.getFeatures()
         
-        return features_troncons
+        return features_troncons, explode_layer
     
-    def creation_arrete(self, troncons): # Cette fonction est opérationnelle et est commentée.
+    def creation_arrete(self, troncons): # FINAL
         """
         Fonction qui prend en entrée les tronçons du réseau routier et qui ramène
         les arretes nécessaires, afin que chaque arrete représente une portion de route,
@@ -262,13 +447,12 @@ class Census:
             Liste de deux tuples, paire de noeud.
 
         """
-        troncons_layer = troncons.getFeatures()
-        
+        # On instancie une liste et un compteur
         arretes = []
         id1 = 0
         
         # Boucle de tri pour conserveruniquement les noeuds de départ, d'arrivée et d'intersection des routes. 
-        for feature in troncons_layer:
+        for feature in troncons:
             geometry = feature.geometry()
             multi_line = geometry.asMultiPolyline()
             id1 = feature.attribute("osm_id")
@@ -283,10 +467,10 @@ class Census:
         
         return arretes
     
-    def creation_graphe(self, arretes_de_zone): # Cette fonction est opérationnelle et est commentée.
+    def creation_graphe(self, arretes_de_zone): # FINAL
         """
         Fonction qui prend en entrée les arretes qui représentent le réseau routier au mieux, et
-        qui ressort un graph, une modélisation avec noeuds (nodes) et arretes (edges)
+        qui ressort un graphe, une modélisation avec noeuds (nodes) et arretes (edges)
 
         Parameters
         ----------
@@ -300,12 +484,11 @@ class Census:
 
         """
         
-        
         # Initialisation d'un graphe
         G = nx.Graph()
         target_crs = QgsCoordinateReferenceSystem('EPSG:32632')  # Exemple: UTM Zone 32N, correspondant au Nigeria
 
-    # Créer l'objet QgsCoordinateTransform pour la transformation des coordonnées
+        # Création de l'objet QgsCoordinateTransform pour la transformation des coordonnées
         transform = QgsCoordinateTransform(QgsCoordinateReferenceSystem('EPSG:4326'), target_crs, QgsProject.instance())
         
         # Construction du graphe et remplissage
@@ -356,12 +539,30 @@ class Census:
             weight = edge_data['weight']
             testkm.append(weight)
             
-        print("la taille du graphe en mètre : ", sum(testkm))
+        # Test
+        #print("la taille du graphe en mètre : ", sum(testkm))
+        
+        # On vérifie si le graphe est connexe ou non. S'il ne l'est pas, S'il ne l'est pas, on ne peut pas passer sur toutes les routes sur la même zone, il faut plusieurs itinéraires.
+        is_connected = nx.is_connected(G)
+        
+        if is_connected:
+            return G
+            #print("Le graphe est complètement connecté.")
+        else:
+            G_si_plusieurs = []
+            #print("Le graphe n'est pas complètement connecté.")
+            components = nx.connected_components(G)
+            for component in components:
+                subgraph = G.subgraph(component)
+                G_si_plusieurs.append(subgraph)
+                num_nodes = subgraph.number_of_nodes()
+                num_edges = subgraph.number_of_edges()
+    
+                print(f"Sous-graphe : Nombre de nœuds = {num_nodes}, Nombre d'arêtes = {num_edges}")
 
+            return G_si_plusieurs
 
-        return G
-
-    def chemin_optimal(self, graph,passed_edges,passed_nodes, nombre_true,poids_total_parcouru, noeud_depart): # Cette fonction est opérationnelle et est commentée.
+    def chemin_optimal(self, graph,passed_edges,passed_nodes, nombre_true,poids_total_parcouru, noeud_depart): # FINAL
         """
         Fonction qui implémente un algorithme glouton, qui construit des itinéraire. L'algorithme est "aveugle"
         et raisonne donc sur une logique de PPV, avec une considération des poids et du statut des arêtes voisines
@@ -403,7 +604,9 @@ class Census:
                     break
         if noeud_depart == 0:
             if len(liste_noeuds_libres) > 0:
-                start_node = liste_noeuds_libres[0]
+                k = len(liste_noeuds_libres) - 1
+                nombre_aleatoire = random.randint(0, k)
+                start_node = liste_noeuds_libres[nombre_aleatoire]
                 passed_nodes.append(start_node)
             else:
                 print("ERROR")
@@ -568,7 +771,7 @@ class Census:
                                 return self.chemin_optimal(graph, passed_edges,passed_nodes, nombre_true,poids_total_parcouru, 0)
         return passed_edges, poids_total_parcouru
     
-    def tri_itineraires(self,chemin): # Cette fonction est opérationnelle et est commentée.
+    def tri_itineraires(self,chemin): # FINAL
         """
         Fonction qui permet de passer des paires de noeuds à des polylignes
 
@@ -606,7 +809,7 @@ class Census:
 
         return les_chemins
     
-    def meilleur_glouton(self,G,nombre_de_relance): # Cette fonction est opérationnelle et est commentée.
+    def meilleur_glouton(self,G,nombre_de_relance, init_node): # FINAL
         """
         Fonction qui permet de lancer l'algorithme glouton (chemin_optimal, tri_itineraires) plusieurs fois et de comparer les
         résultats de chacun pour choisir le plus optimal.
@@ -617,6 +820,8 @@ class Census:
             graphe modélisant le réseau routier.
         nombre_de_relance : int
             Nombre de fois que l'utilisateurs souhaite lancer l'algorithme glouton. 
+        init_node : networkx.node()
+            Noeud de départ choisi par l'utilisateur pour le secteur de dénombrement en question.
 
         Returns
         -------
@@ -625,8 +830,16 @@ class Census:
         solution : list
             Liste avec chaque itinéraire construit, sous forme de liste de paires de noeuds, de polylignes, avec le nombre d'itinéraires, le coût total parcouru, l'indice d'optimalité.
         """
-        
         liste_infos_pour_chaque_iti = []
+        
+        distance = 100
+        potential_node = None
+
+        for node in list(G.nodes()):
+            distance_entre_points = euclidean(np.array(node), np.array(init_node))
+            if distance_entre_points < distance:
+                distance = distance_entre_points
+                potential_node = node
         
         for i in range(nombre_de_relance): # On réalise n fois le protocole suivant :
             
@@ -634,7 +847,7 @@ class Census:
             nx.set_node_attributes(G, False, 'Visited')
             nx.set_edge_attributes(G, False, 'Visited')
             poids_total_parcouru = 0
-            noeud_depart = random.choice(list(G.nodes())) # On initialise un noeud de départ. Il est ici au hasard, il peut être demandé à l'utilisateur.
+            noeud_depart = potential_node # On initialise un noeud de départ. Il est ici au hasard, il peut être demandé à l'utilisateur.
             passed_edges = []
             passed_nodes = []
             nombre_true = 0
@@ -661,14 +874,30 @@ class Census:
         
         # On prépare le return, qui ressort les informations sur le meilleur itinéraire. 
         solution = liste_infos_pour_chaque_iti[index_minimum]
-        print("le nombre de metres parcouru est : ", solution[3])
+        # Test
+        #print("le nombre de metres parcouru est : ", solution[3])
         itineraire_final = solution[1]
+        
+        testkm=[]
+        for start_node, end_node, edge_data in G.edges(data=True):
+            weight = edge_data['weight']
+            testkm.append(weight)
+            
+        # Test
+        print("la taille du graphe en mètre : ", sum(testkm))
+        # Pour étudier la qualité du trajet en fonction du nombre d'intérations
+        print("le nombre de noeud est : ", G.number_of_nodes())
+        print("le nombre d'arêtes est : ", G.number_of_edges())
+        print("l'indice d'optimalité a une valeur de : ", solution[4])
+        print("Combien d'itinéraires on été créés  ? : ", solution[2])
+        print("La distance parcourue est : ", solution[3])
+        print("----------------------------------------------")
         
         return itineraire_final, solution
     
-    def coordonnees_formatees(self,solution): # Cette fonction est opérationnelle et fonctionne.
+    def coordonnees_formatees(self,solution): # FINAL
         """
-        Fonction qui prend en entrée les arretes itinéraires optimaux et qui les formate pour préparer
+        Fonction qui prend en entrée les arretes des itinéraires optimaux et qui les formate pour préparer
         un premier rattachement (par le biais d'une distinction entre les petits et grands itinéraires).
 
         Parameters
@@ -682,6 +911,8 @@ class Census:
             Liste propre de ce qui va permettre de les classer entre petits et grands itinéraires. 
 
         """
+        # Test
+        #print("coordonnées formatées ", solution)
         coordinates_propre = []
         for iti in solution :
             iti_propre = []
@@ -689,9 +920,11 @@ class Census:
                 iti_propre.append(arrete[0])
             iti_propre.append(iti[-1][1])
             coordinates_propre.append(iti_propre)
+        # Test
+        #print("coordonnées formatées apres ", coordinates_propre)
         return coordinates_propre
     
-    def plot_itineraries_when_multiple(self,coo): # Cette fonction est opérationnelle et est commentée.
+    def plot_itineraries_when_multiple(self,coo): # FINAL, NOT USED
         """
         Fonction qui permet de représenter les itinéraires optimaux sur une zone, avant que ceux-ci ne
         soient rattachés entre eux. Elle ne retourne rien puisqu'il s'agit d'une fonction de visualisation.
@@ -714,7 +947,7 @@ class Census:
             layer.dataProvider().addFeature(feature)
             QgsProject.instance().addMapLayer(layer)
         
-    def plot_arrow_polyline(self, polyligne): # Cette fonction est opérationnelle et est commentée.
+    def plot_arrow_polyline(self, polyligne, instructions): # FINAL
         """
         Fonction qui permet de configruer la visualisation et représenter l'itinéraire final. Elle ne
         return rien, il ne s'agit que de visualisation.
@@ -728,63 +961,92 @@ class Census:
         -------
 
         """
-        points = [QgsPointXY(x[0], x[1]) for x in polyligne]
-        
-        # Création de la polyligne à partir des points
-        polyline = QgsGeometry.fromPolylineXY(points)
-        
-        # Création d'une couche vectorielle pour stocker les segments de la polyligne
-        layer = QgsVectorLayer("LineString?crs=EPSG:4326", "Itinéraire", "memory")
-        provider = layer.dataProvider()
-        
-        # Définir les champs de la couche
-        provider.addAttributes([QgsField("rang", QVariant.Int)])
-        
-        # Ajouter les entités et les attributs
-        features = []
-        for i in range(len(points) - 1):
-            segment_start = points[i]
-            segment_end = points[i + 1]
+        try :
+            #print("polyligne a représenter : ", polyligne)
+            points = [QgsPointXY(x[0], x[1]) for x in polyligne]
             
-            # Création d'une entité pour le segment avec le rang attribué
-            segment_feature = QgsFeature()
-            segment_geometry = QgsGeometry.fromPolylineXY([segment_start, segment_end])
-            segment_feature.setGeometry(segment_geometry)
-            segment_feature.setAttributes([i + 1])  # Attribution du rang (index + 1)
+            # Création de la polyligne à partir des points
+            polyline = QgsGeometry.fromPolylineXY(points)
             
-            features.append(segment_feature)
+            # Création d'une couche vectorielle pour stocker les segments de la polyligne
+            layer = QgsVectorLayer("LineString?crs=EPSG:4326", "Itinéraire", "memory")
+            provider = layer.dataProvider()
             
-            # Ajout des entités à la couche
-        provider.addFeatures(features)
-        
-        layer.updateFields()
-        layer.updateExtents()
-        
-        # Définition du style de symbologie pour les flèches
-        symbol_layer = QgsArrowSymbolLayer()
-        #symbol_layer.setFillColor(QColor(255, 0, 0))  # Couleur de remplissage de la flèche
-        
-        line_symbol = QgsLineSymbol()
-        line_symbol.setWidth(0.6)  # Épaisseur du contour de la flèche
-        line_symbol.changeSymbolLayer(0, symbol_layer)
-        
-        # Définition du rendu de symboles unique
-        renderer = QgsSingleSymbolRenderer(line_symbol)
-        layer.setRenderer(renderer)
-        
-        # Ajout de la couche à la carte
-        QgsProject.instance().addMapLayer(layer)
+            # Définir les champs de la couche
+            provider.addAttributes([QgsField("rang", QVariant.Int)])
+            provider.addAttributes([QgsField("instruction", QVariant.String)])
+            
+            # Ajouter les entités et les attributs
+            features = []
+            for i in range(len(points) - 1):
+                segment_start = points[i]
+                segment_end = points[i + 1]
+                
+                # Création d'une entité pour le segment avec le rang attribué
+                segment_feature = QgsFeature()
+                segment_geometry = QgsGeometry.fromPolylineXY([segment_start, segment_end])
+                segment_feature.setGeometry(segment_geometry)
+                if len(instructions) >0:    
+                    segment_feature.setAttributes([i + 1, instructions[i]])  # Attribution du rang (index + 1)
+                else:
+                    segment_feature.setAttributes([i + 1])
+                features.append(segment_feature)
 
-    def draw_graph(self,G): # Non lancée dans le plugin
+            # Ajout des entités à la couche
+            provider.addFeatures(features)
+            
+            layer.updateFields()
+            layer.updateExtents()
+            
+            # Définition du style de symbologie pour les flèches
+            symbol_layer = QgsArrowSymbolLayer()
+            #symbol_layer.setFillColor(QColor(255, 0, 0))  # Couleur de remplissage de la flèche
+            
+            line_symbol = QgsLineSymbol()
+            line_symbol.setWidth(0.6)  # Épaisseur du contour de la flèche
+            line_symbol.changeSymbolLayer(0, symbol_layer)
+            
+            # Définition du rendu de symboles unique
+            renderer = QgsSingleSymbolRenderer(line_symbol)
+            layer.setRenderer(renderer)
+            
+            # Ajout de la couche à la carte
+            QgsProject.instance().addMapLayer(layer)
+            
+            # Sauvegarde de la couche dans un fichier
+            layer_path = "C:/Users/Myriam/Documents/PLUGIN_QGIS_CORRECT/donnees_crees/la_couche_sortie.shp"  # Remplacez par le chemin de votre choix
+            options = QgsVectorFileWriter.SaveVectorOptions()
+            options.driverName = "ESRI Shapefile"
+            QgsVectorFileWriter.writeAsVectorFormatV2(layer, layer_path, QgsCoordinateTransformContext(), options)
+            
+        except:
+            points = []
+            for i in range(0,len(polyligne) -1, 2):
+                formate_point = (polyligne[i], polyligne[i+1])
+                points.append(formate_point)
+            self.plot_arrow_polyline(points, instructions)
+
+    def draw_graph(self,G): # FINAL, NOT USED
+        """
+        Fonction qui permet de représenter le graphe construit pour représenter le réseau routier.
+
+        Parameters
+        ----------
+        G : networkx.graph()
+            Graphe représentant le réseau routier, avec les bonnes informations récupérées.
+
+        Returns
+        -------
+        canvas.show() : canvas.show()
+            Visualisation du graphe sur un autre onglet dans QGIS. 
+        """
         
-        #FONCTIONNE, enfin pas vraiment, probleme avec la création du canva...
-        
-    # Créer une nouvelle couche vectorielle pour les nœuds du graphe
+        # Créer une nouvelle couche vectorielle pour les nœuds du graphe
         layer_nodes = QgsVectorLayer("Point?crs=EPSG:4326", "Nodes", "memory")
         layer_nodes.startEditing()
         layer_nodes.addAttribute(QgsField("node_id", QVariant.Int))
 
-    # Ajouter les nœuds au layer_nodes
+        # Ajouter les nœuds au layer_nodes
         for i, node in enumerate(G.nodes()):
             feature = QgsFeature()
             point = QgsPointXY(*node)
@@ -794,15 +1056,15 @@ class Census:
 
         layer_nodes.commitChanges()
 
-    # Ajouter le layer_nodes à QgsProject
+        # Ajouter le layer_nodes à QgsProject
         QgsProject.instance().addMapLayer(layer_nodes)
 
-    # Créer une nouvelle couche vectorielle pour les arêtes du graphe
+        # Créer une nouvelle couche vectorielle pour les arêtes du graphe
         layer_edges = QgsVectorLayer("LineString?crs=EPSG:4326", "Edges", "memory")
         layer_edges.startEditing()
         layer_edges.addAttribute(QgsField("edge_id", QVariant.Int))
 
-    # Ajouter les arêtes au layer_edges
+        # Ajouter les arêtes au layer_edges
         for i, edge in enumerate(G.edges()):
             start_node, end_node = edge
             start_point = QgsPointXY(*start_node)
@@ -814,19 +1076,19 @@ class Census:
 
         layer_edges.commitChanges()
 
-    # Ajouter le layer_edges à QgsProject
+        # Ajouter le layer_edges à QgsProject
         QgsProject.instance().addMapLayer(layer_edges)
 
-    # Créer un canvas pour afficher la carte
+        # Créer un canvas pour afficher la carte
         canvas = QgsMapCanvas()
         canvas.setDestinationCrs(layer_nodes.crs())
         canvas.setLayers([layer_nodes, layer_edges])
         canvas.zoomToFullExtent()
 
-    # Afficher la carte dans la fenêtre de QGIS
+        # Afficher la carte dans la fenêtre de QGIS
         return canvas.show()
     
-    def iti_petit_grand_tri(self,liste_de_liste): # Cette fonction est opérationnelle et est commentée.
+    def iti_petit_grand_tri(self,liste_de_liste): # FINAL
         """
         Fonction qui permet de trier les itinéraires : les plus petits et les plus grands
 
@@ -843,18 +1105,24 @@ class Census:
             Liste de liste avec chaque liste étant un grand itinéraire.
 
         """
+        # Test
+        #print("iti petit grand tri début ", liste_de_liste)
+        first_iti = liste_de_liste[0]
         petits_iti = []
         grands_iti = []
-        for liste in liste_de_liste:
-            if len(liste) <20: # On décide du seuil pour définir un petit itinéraire. Ici, c'est 20 noeuds la limite. 
-                petits_iti.append(liste)
-                
-            else:
-                grands_iti.append(liste)
+        for i in range(1, len(liste_de_liste)):
+            if len(liste_de_liste[i]) <20:
+                petits_iti.append(liste_de_liste[i])
+            else :
+                grands_iti.append(liste_de_liste[i])
         
-        return petits_iti, grands_iti
+        # On vérifie qu'on est pas dans le cas d'un petit réseau, où un seul itinéraire est suffisant et qui ne nécessite pas ce tri
+        if len(petits_iti) == 0 and len(grands_iti) == 0 :
+            return first_iti, 0, 0
+        
+        return first_iti, petits_iti, grands_iti
     
-    def iti_mignon_oust(self,graph, petit_iti, grand_iti): # Cette fonction est opérationnelle et est commentée.
+    def iti_mignon_oust(self,graph, petit_iti, grand_iti): # FINAL
         """
         Fonction qui sélectionne les petits itinéraires à proximité des grands itinéraires et les
         introduit dans les plus grands. Cela se modélise comme suit : grand_itinéraire(part 1) + petit
@@ -877,6 +1145,12 @@ class Census:
             Liste de listes des grands itinéraires, dont certains ont été modifiés
 
         """
+        # Cas du petit réseau routier
+        
+        if petit_iti == 0 and grand_iti == 0:
+            return 0,0
+        
+        # Cas général
         
         for petite_liste in petit_iti:
             noeud_depart = petite_liste[0] # On récupère le noeud de départ du petit itinéraire. 
@@ -895,7 +1169,7 @@ class Census:
                     break
         return petit_iti, grand_iti
     
-    def multiples_to_one(self, graph, liste_coordinates, snake, iti_2): # Cette fonction est opérationnelle et est commentée. 
+    def multiples_to_one(self, graph, liste_coordinates, snake, iti_2): # FINAL
         """
         Fonction qui permet de créer l'itinéraire final (en terme de points passés) en collant chaque itinéraire
         bout-à-bout en fonction de leur proximité. Elle passe pour cela par une évaluation de la qualité des Dijkstra, d'un point
@@ -952,10 +1226,10 @@ class Census:
         
         return self.multiples_to_one(graph, liste_coordinates, snake, possibilite) # On réappelle la fonction jusqu'au critère d'arrêt. 
             
-    def extraction_tuple(self,liste_a_trier): # Cette fonction est opérationnelle et est commentée.
+    def extraction_tuple(self,liste_a_trier): # FINAL
         """
         Fonction qui permet de transformer une liste d'itinéraire non formatée en une liste de tuples.
-        Elle considère le cas ou deux sous-listes peuvent avoir été créées au maximum.
+        Elle considère le cas ou deux voire trois sous-listes peuvent avoir été créées au maximum.
 
         Parameters
         ----------
@@ -969,16 +1243,28 @@ class Census:
         """
         u = []
         for element in liste_a_trier:
-            if len(element) ==2 : # Si l'élément à une longueur de deux, alors c'est une liste de deux listes
-                for liste in element: # Pour chacune des deux listes...
-                    for tuples in liste:
-                        u.append(tuples) # ... on ajoute les tuples à u.
-            else: # Sinon, l'élément est une liste de tuples
-                for tuples in element: # On ajoute les tuples à u.
-                    u.append(tuples)
+            if type(element) == tuple:
+                u.append(element)
+            else:
+                #Sinon, on sait déjà qu'il s'agit d'une liste
+                for element2 in element:
+                    if type(element2) == tuple:
+                        u.append(element2)
+                    else:
+                        #On sait déja que c'est une liste
+                        for element3 in element2:
+                            if type(element3)== tuple:
+                                u.append(element3)
+                            else:
+                                for element4 in element3:
+                                    if type(element4) == tuple:
+                                        u.append(element4)
+
+        # Test
+        #print("extraction tuples : ", u)
         return u
     
-    def reformatage(self,rattache): # Cette fonction est opérationnelle et est commentée.
+    def reformatage(self,rattache): # FINAL
         """
         Fonction qui condense la liste de deux listes (grands iti et petits iti) en une seule pour la préparer
         à la fonction créant l'itinéraire final.
@@ -991,8 +1277,12 @@ class Census:
         Returns
         -------
         coordinates_final : List
-            Liste de tuples qui consiste en la polyligne final, l'itinéraire ressorti pour la zone étudiée.
+            Liste de tuples qui consiste en la polyligne finale, l'itinéraire ressorti pour le secteur de dénombrement étudié.
         """
+
+        if rattache[0] == 0 and rattache[1]==0:
+            return 0
+            
         coordinates_final = [] # On ajoute les éléments de chaque liste dans une liste
         for iti in rattache[0]:
             coordinates_final.append(iti)
@@ -1004,36 +1294,177 @@ class Census:
             for j in i:
                 if type(j) == list:
                     print("Error : your coordinates aren't good")
+                    
         return coordinates_final
     
-    def re_etoffement(self, troncons, polyligne): # En cours.
-        print("notre couche de troncon : ", len(troncons))
-        print("notre couche avec une polyligne : ", len(polyligne))
-        troncon_formate_pour_recollage = []
-        for element in troncons:
-            noeud_sale_dep = element[0]
-            noeud_sale_arr = element[1]
-            noeud_propre_dep= (noeud_sale_dep[0],noeud_sale_dep[1])
-            noeud_propre_arr = (noeud_sale_arr[0],noeud_sale_arr[1])
-            troncon_formate_pour_recollage.append(noeud_propre_dep)
-            troncon_formate_pour_recollage.append(noeud_propre_arr)
-        #print("les troncons recolléss bien tout plein", troncon_formate_pour_recollage)
-        final = []
-        for i in range(len(polyligne) -1):
-            noeud_previous = polyligne[i]
-            noeud_after = polyligne[i+1]
-            if noeud_previous in troncon_formate_pour_recollage and noeud_after in troncon_formate_pour_recollage:
-                #print("hello")
-                idx1 =troncon_formate_pour_recollage.index(noeud_previous) 
-                idx2 = troncon_formate_pour_recollage.index(noeud_after)
-                debut = min(idx1, idx2)
-                fin = min(idx1, idx2)
-                indexes_entre_tuples = list(range(debut + 1, fin))
-                final.append(noeud_previous)
-                for a in indexes_entre_tuples:
-                    final.append(troncon_formate_pour_recollage[a])
-                final.append(noeud_after)
+    def retoffement(self, troncons, itineraire_nodes): # NOT FINAL, NOT USED
+        """
+        Ebauche de fonction pour recoller les itinéraires sur les routes réelles.
         
-        #print("alors le final ?", final)
-        print("len", len(final))
-        return final
+        Parameters
+        ----------
+        troncons : Features
+            Routes (avec la bonne géométrie)
+        itineraire_nodes : List
+            Liste des noeuds de l'itinéraire final
+
+        Returns
+        -------
+        nouvel_itineraire : List
+            Liste des tronçons dans leur enchaînement calculé par les fonctions de parcours optimal.
+        """
+        
+        nouvel_itineraire = []
+        for i in range(len(itineraire_nodes)-1):
+            noeud_depart = itineraire_nodes[i]
+            noeud_arrivee = itineraire_nodes[i+1]
+            features = troncons.getFeatures()
+
+            for troncon in features:
+                geometry = troncon.geometry()
+                polyline = geometry.asMultiPolyline()
+                start_point = (polyline[0][0][0],polyline[0][0][1])
+                end_point = (polyline[-1][-1][0],polyline[-1][-1][1])
+                formatted_coord1 = (round(start_point[0], 7), round(start_point[1], 7))
+                formatted_coord2 = (round(end_point[0], 7), round(end_point[1], 7))
+                # Test
+                #if formatted_coord1 == noeud_depart and formatted_coord2 == noeud_arrivee:
+                    #print("le cas arrive !!")
+                #elif formatted_coord1 == noeud_depart:
+                    #print("super on a trouvé juste un point")    
+            break
+        return nouvel_itineraire
+    
+    def indications(self,every_coord): # FINAL
+        """
+        Fonction qui permet de générer des indication pour passer d'une route à la suivante dans l'itinéraire.
+        Elle se base sur des calculs d'azimut.
+
+        Parameters
+        ----------
+        every_coord : List
+            Liste de tuples : Chaque tuple est un point de la polyligne.
+
+        Returns
+        -------
+        guidage : List
+            Liste des indications associées à chaque route pour passer à la suivante.
+        """
+        
+        guidage = []
+        if len(every_coord) < 1:
+            return guidage
+        else:
+            for i in range (len(every_coord)-2):
+                A = every_coord[i]
+                B = every_coord[i+1]
+                C = every_coord[i+2]
+
+                lat_A = math.radians(A[1])
+                longA = math.radians(A[0])
+                
+                lat_B = math.radians(B[1])
+                longB = math.radians(B[0])
+ 
+                lat_C = math.radians(C[1])
+                longC = math.radians(C[0])
+    
+                Delta_long_AB = longB - longA
+                Delta_long_BC = longC - longB
+    
+                azimut_AB = math.atan2(math.sin(Delta_long_AB) * math.cos(lat_B), math.cos(lat_A) * math.sin(lat_B) - math.sin(lat_A) * math.cos(lat_B) * math.cos(Delta_long_AB))
+                azimut_BC = math.atan2(math.sin(Delta_long_BC) * math.cos(lat_C), math.cos(lat_B) * math.sin(lat_C) - math.sin(lat_B) * math.cos(lat_C) * math.cos(Delta_long_BC))
+    
+                diff_azimut = azimut_BC - azimut_AB
+    
+                if diff_azimut < 0:
+                    diff_azimut += 2 * math.pi
+                
+                azimut_AB_degrees = math.degrees(azimut_AB)
+                azimut_BC_degrees = math.degrees(azimut_BC)
+                diff_azimut_degrees = math.degrees(diff_azimut)
+
+                
+                if 0 <= diff_azimut_degrees < 15 or 345 <= diff_azimut_degrees <= 360:
+                    
+                    indication =  " allez tout droit"
+                elif 15 <= diff_azimut_degrees < 55 :
+                    
+                    indication = " serrez à droite"
+                elif 55 <= diff_azimut_degrees < 125 :
+                    
+                    indication = " tournez à droite"
+                elif 125 <= diff_azimut_degrees < 165:
+                    
+                    indication = " tournez franchement à droite"
+                elif 165 <= diff_azimut_degrees < 195:
+                    
+                    indication = " faites demi tour"
+                elif 195 <= diff_azimut_degrees < 235:
+                    
+                    indication = " tournez franchement à gauche"
+                elif 235 <= diff_azimut_degrees < 305:
+                    
+                    indication = " tournez à gauche"
+                else:
+                    
+                    indication = " serrez à gauche"
+                
+                guidage.append(indication)
+                
+            # Cas de la dernière route
+            guidage.append("Vous avez terminé !")
+            
+        return guidage
+    
+    def get_first_node(self, adresse_a_geocoder): # FINAL
+        """
+        Fonction qui récupère la liste des coordonnées de départ, qui les transforme en chaine de caractère,
+        puis qui analyse cette chaîne pour en ressortir une Liste de Tuples.
+
+        Parameters
+        ----------
+        adresse_a_geocoder : Input
+            Liste de coordonnées entrée par l'utilisateur, dont le type est non explicite. 
+
+        Returns
+        -------
+        coordinates_list : List
+            Liste de tuples qui consiste en les coordonnées rentrées par l'utilisateur, avec type explicite.
+        """
+        coordonnees = str(adresse_a_geocoder)
+        try:
+            # Utilisation de la fonction ast.literal_eval pour évaluer la chaîne en une structure de données Python
+            coordinates_list = ast.literal_eval(coordonnees)
+        
+            # Vérification que chaque élément de la liste est un tuple de coordonnées
+            if all(isinstance(coord, tuple) and len(coord) == 2 for coord in coordinates_list):
+                return coordinates_list
+            else:
+                raise ValueError("La chaîne ne contient pas que des tuples de coordonnées valides.")
+        except (ValueError, SyntaxError) as e:
+            raise ValueError("La chaîne n'est pas au bon format.") from e      
+    
+    def add_start_line(self, firstline, reste): # FINAL
+        """
+        Fonction qui récupère l'itinéraire créé et qui ajoute à son début le premier itinéraire construit.
+
+        Parameters
+        ----------
+        firstline : List
+            Liste de tuples : premier itinéraire à partir du point de départ de l'utilisateur.
+        reste : List
+            Liste de tuples : reste de l'itinéraire sur le secteur de dénombrement. 
+
+        Returns
+        -------
+        liste : List
+            Liste de tuples : itinéraire global.
+        """
+        liste = []
+        liste.append(firstline)
+        for element in reste:
+            liste.append(element)
+        # Test
+        #print("mon itinéraire apres rattache total : ", liste)
+        return liste 
