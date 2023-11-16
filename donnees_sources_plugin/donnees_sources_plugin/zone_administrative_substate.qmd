@@ -1,0 +1,55 @@
+<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.22.0-Bia?owie?a">
+  <identifier>new_lga_nigeria_2003</identifier>
+  <parentidentifier></parentidentifier>
+  <language>EN</language>
+  <type>dataset</type>
+  <title>new_lga_nigeria_2003</title>
+  <abstract>A vector map describing the third level administrative units of Nigeria digitized by the International Institute of Tropical Agriculture (IITA) in 2003.This dataset is an extract from the Administrative Map of Nigeria (Eleventh edition) drawn and printed by the Federal Surveys (2000) at a scale of 1: 1 000 000. It describes the recent Local Government Administrative Units as were created in 1996.The map contains about 774 Local Government Councils (more accurately 768 local governments in the 36 states and 6 area councils in the Federal Capital territory) in Nigeria.
+
+This dataset can be used in various GIS applications .i.e. general administrative assessments, education, social welfare, public health, transportation, utilities, economic matters and other issues.</abstract>
+  <keywords vocabulary="gmd:topicCategory">
+    <keyword></keyword>
+    <keyword>Local government Areas</keyword>
+  </keywords>
+  <contact>
+    <contactAddress>
+      <type>mailing and physical address</type>
+      <address>Geospatial Laboratory, IITA</address>
+      <city>Ibadan</city>
+      <administrativearea>Oyo State</administrativearea>
+      <postalcode>PMB.5320</postalcode>
+      <country>Nigeria</country>
+    </contactAddress>
+    <name></name>
+    <organization></organization>
+    <position></position>
+    <voice>+234 02 2412626 2812</voice>
+    <fax>+234 02 2412221</fax>
+    <email>clegg@cgiar.org</email>
+    <role>Point de contact</role>
+  </contact>
+  <links>
+    <link description="" size="" name="Shapefile" url="file://" type="Local Area Network" format="" mimeType=""/>
+  </links>
+  <fees></fees>
+  <constraints type="Accès">None</constraints>
+  <rights>No warranty expressed or implied is made by IITA regarding the utility of the data on any other systems nor shall the act of distribution constitute such warranty.Users should however acknowledge IITA as the source used in the creation of any reports, publications, new data sets, derived products, or services resulting from the use of this data set.</rights>
+  <encoding></encoding>
+  <crs>
+    <spatialrefsys>
+      <wkt></wkt>
+      <proj4></proj4>
+      <srsid>0</srsid>
+      <srid>0</srid>
+      <authid></authid>
+      <description></description>
+      <projectionacronym></projectionacronym>
+      <ellipsoidacronym></ellipsoidacronym>
+      <geographicflag>false</geographicflag>
+    </spatialrefsys>
+  </crs>
+  <extent>
+    <spatial maxz="0" minx="2.66843200000000014" minz="0" maxx="14.68007000000000062" maxy="13.89201000000000086" dimensions="2" crs="EPSG:4326" miny="4.27714399999999983"/>
+  </extent>
+</qgis>
