@@ -7,7 +7,7 @@ Census est un plugin de construction d'itinéraire de recensement (dans le sens 
 
 <h2>2 - Contexte </h2>
 Ce plugin a été réalisé dans le contexte d'un stage de trois mois réalisé à l'Institut des Sciences Environnementales de l'Université du Québec à Montréal, Canada.
-Le développement de cette application trouve son utilité dans le contexte de l'augmentation démographique, notamment au Nigéria, et de la nécessité future d'optimiser les ressources humaines, économiques, logicielles et techniques des recensements de population.
+Le développement de cette application trouve son utilité dans le contexte de l'augmentation démographique, notamment au Nigeria, et de la nécessité future d'optimiser les ressources humaines, économiques, logicielles et techniques des recensements de population.
 
 
 <h2>3 - Données d'entrées, données de sorties </h2>
