@@ -1,5 +1,5 @@
 # Census
-qgis plugin optimizing the total path of a city
+QGIS plugin optimizing the total path of a city
 <h1>Plugin CENSUS</h1>
 
 <h2>1 - Description </h2>
