@@ -4,7 +4,7 @@ QGIS plugin optimizing the total path of a city
 
 <h2>1 - Description </h2>
 Census est un plugin de construction d'itinéraire de recensement (dans le sens démographique du terme) optimisé à l'échelle d'une ville. L'algorithmie se base sur un raisonnement de théorie des graphes et sur un modèle heuristique de résolution du problème du voyageur de commerce. Le parcours proposé peut être considéré comme optimal (étude statistique).
-![alt text](https://github.com/VictorienO/Census/blob/main/image1.jpg?raw=true) "Itinéraire créé à l'échelle d'un centre-ville")
+![alt text](https://github.com/VictorienO/Census/blob/main/photo_city_everything.jpg?raw=true) "Itinéraire créé à l'échelle d'un centre-ville")
 
 <h2>2 - Contexte </h2>
 Ce plugin a été réalisé dans le contexte d'un stage de trois mois réalisé à l'Institut des Sciences Environnementales de l'Université du Québec à Montréal, Canada.
